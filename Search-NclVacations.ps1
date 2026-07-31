@@ -15,6 +15,15 @@
     For any vacation whose price is below -AlertThreshold, an extra
     attention-grabbing "***ALERT***" line is printed immediately below it.
 
+    Every run is also appended (not overwritten) as rows to a CSV file, with
+    a timestamp column, so that repeated runs (e.g. via Task Scheduler) build
+    up a price history you can chart in Excel over time. By default the CSV
+    is written into a "NCL Price Tracking" folder inside your OneDrive
+    folder (auto-detected via the $env:OneDriveConsumer / $env:OneDrive
+    environment variables set by the OneDrive desktop app), so it syncs to
+    your Microsoft 365 account automatically. Use -CsvPath to point
+    somewhere else, or -NoCsv to skip writing the CSV entirely.
+
 .PARAMETER EmbPorts
     One or more embarkation port codes to search from (e.g. JAX for
     Jacksonville, FL). Matches the "embPorts" parameter on ncl.com.
@@ -46,17 +55,36 @@
     If specified, results are sorted from cheapest to most expensive before
     being printed (the API's default order is NCL's own "Featured" order).
 
+.PARAMETER CsvPath
+    Path to the CSV file that results are appended to (the file and any
+    parent folders are created automatically on first run; a header row is
+    written once). Defaults to "NCL Price Tracking\NCL-Vacation-Price-History.csv"
+    inside your OneDrive folder, auto-detected from $env:OneDriveConsumer
+    (personal/family Microsoft accounts) or $env:OneDrive. Falls back to the
+    script's own folder if no OneDrive folder can be detected (for example
+    on non-Windows hosts, or when OneDrive isn't installed/signed in).
+
+.PARAMETER NoCsv
+    If specified, skips writing/appending to the CSV file entirely.
+
 .EXAMPLE
     .\Search-NclVacations.ps1
 
     Runs the exact search from the NCL URL:
     https://www.ncl.com/vacations?embPorts=JAX&dates=Nov-2026,Dec-2026,Jan-2027,Feb-2027,Mar-2027&guests=2
+    and appends the results to the default CSV in your OneDrive folder.
 
 .EXAMPLE
     .\Search-NclVacations.ps1 -EmbPorts MIA -Dates Jun-2027,Jul-2027 -Guests 4 -AlertThreshold 500 -SortByPrice
 
 .EXAMPLE
     .\Search-NclVacations.ps1 -Url "https://www.ncl.com/vacations?embPorts=JAX&dates=Nov-2026,Dec-2026&guests=2"
+
+.EXAMPLE
+    .\Search-NclVacations.ps1 -CsvPath "$env:OneDriveConsumer\Documents\ncl-prices.csv"
+
+.EXAMPLE
+    .\Search-NclVacations.ps1 -NoCsv
 #>
 
 [CmdletBinding(DefaultParameterSetName = 'Discrete')]
@@ -78,7 +106,11 @@ param(
     [ValidateRange(1, 200)]
     [int]$PageSize = 50,
 
-    [switch]$SortByPrice
+    [switch]$SortByPrice,
+
+    [string]$CsvPath,
+
+    [switch]$NoCsv
 )
 
 $ErrorActionPreference = 'Stop'
@@ -158,11 +190,13 @@ function Get-NclVacations {
 
         foreach ($item in $itineraries) {
             $results.Add([PSCustomObject]@{
-                Title    = $item.title
-                Days     = $item.duration.days
-                Price    = [double]$item.combinedPrice
-                Currency = $item.currencyCode
-                Ship     = $item.ship.title
+                ItineraryCode = $item.code
+                PackageId     = $item.packageId
+                Title         = $item.title
+                Days          = $item.duration.days
+                Price         = [double]$item.combinedPrice
+                Currency      = $item.currencyCode
+                Ship          = $item.ship.title
             })
         }
 
@@ -212,6 +246,78 @@ function Write-VacationReport {
     }
 }
 
+function Get-DefaultCsvPath {
+    <#
+        Auto-detects the local OneDrive sync folder so results land somewhere
+        that syncs to a Microsoft 365 account without any extra setup.
+        $env:OneDriveConsumer is set by the OneDrive desktop app when signed
+        into a personal/family Microsoft account; $env:OneDrive points at
+        whichever OneDrive account was configured first (personal or work).
+    #>
+    $oneDriveRoot = $env:OneDriveConsumer
+    if (-not $oneDriveRoot) {
+        $oneDriveRoot = $env:OneDrive
+    }
+
+    if ($oneDriveRoot -and (Test-Path -LiteralPath $oneDriveRoot)) {
+        return Join-Path -Path (Join-Path -Path $oneDriveRoot -ChildPath 'NCL Price Tracking') -ChildPath 'NCL-Vacation-Price-History.csv'
+    }
+
+    Write-Warning "Could not find a OneDrive folder (checked `$env:OneDriveConsumer and `$env:OneDrive). Writing the CSV next to the script instead. Pass -CsvPath to choose a specific location, e.g. your OneDrive folder."
+    $scriptFolder = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
+    return Join-Path -Path $scriptFolder -ChildPath 'NCL-Vacation-Price-History.csv'
+}
+
+function Export-VacationHistory {
+    <#
+        Appends one row per vacation to a CSV file, tagged with a timestamp
+        and the search that produced it, so repeated runs build up a price
+        history over time. Creates the file (with header) and any parent
+        folders on first use; subsequent runs only append data rows.
+    #>
+    param(
+        [System.Collections.Generic.List[object]]$Vacations,
+        [string]$CsvPath,
+        [string]$SearchQuery,
+        [double]$AlertThreshold,
+        [datetime]$Timestamp
+    )
+
+    if ($Vacations.Count -eq 0) {
+        return
+    }
+
+    $folder = Split-Path -Path $CsvPath -Parent
+    if ($folder -and -not (Test-Path -LiteralPath $folder)) {
+        New-Item -ItemType Directory -Path $folder -Force | Out-Null
+    }
+
+    $rows = foreach ($vacation in $Vacations) {
+        [PSCustomObject]@{
+            Timestamp      = $Timestamp.ToString('yyyy-MM-dd HH:mm:ss')
+            SearchQuery    = $SearchQuery
+            ItineraryCode  = $vacation.ItineraryCode
+            PackageId      = $vacation.PackageId
+            Title          = $vacation.Title
+            Ship           = $vacation.Ship
+            Days           = $vacation.Days
+            Price          = $vacation.Price
+            Currency       = $vacation.Currency
+            IsDeal         = $vacation.Price -lt $AlertThreshold
+            AlertThreshold = $AlertThreshold
+        }
+    }
+
+    try {
+        $rows | Export-Csv -Path $CsvPath -NoTypeInformation -Append -Encoding UTF8
+        Write-Host ""
+        Write-Host "Appended $($rows.Count) row(s) to '$CsvPath'." -ForegroundColor Green
+    }
+    catch {
+        Write-Warning "Could not write to '$CsvPath': $_ (Is the file open in Excel, or is OneDrive still syncing/signed out?)"
+    }
+}
+
 $queryString = Get-NclQueryString -Url $Url -EmbPorts $EmbPorts -Dates $Dates -Guests $Guests
 
 Write-Host "Searching NCL vacations (https://www.ncl.com/vacations?$queryString) ..." -ForegroundColor Cyan
@@ -223,3 +329,10 @@ if ($SortByPrice) {
 }
 
 Write-VacationReport -Vacations $vacations -AlertThreshold $AlertThreshold
+
+if (-not $NoCsv) {
+    if (-not $CsvPath) {
+        $CsvPath = Get-DefaultCsvPath
+    }
+    Export-VacationHistory -Vacations $vacations -CsvPath $CsvPath -SearchQuery $queryString -AlertThreshold $AlertThreshold -Timestamp (Get-Date)
+}
