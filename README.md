@@ -74,3 +74,62 @@ The CSV columns are: `Timestamp`, `SearchQuery`, `ItineraryCode`,
 
 Requires PowerShell 5.1+ (Windows PowerShell) or PowerShell 7+ (`pwsh`), and
 internet access to `www.ncl.com`.
+
+## Running twice a day (8 AM / 8 PM)
+
+### Windows (Task Scheduler)
+
+`Register-NclVacationsSchedule.ps1` registers a Windows Scheduled Task that
+runs `Search-NclVacations.ps1` automatically at 8:00 AM and 8:00 PM every
+day:
+
+```powershell
+.\Register-NclVacationsSchedule.ps1
+```
+
+Since a scheduled task has no visible console, each run's output (including
+any `***ALERT***` lines) is appended to a log file — by default
+`NCL Price Tracking\NCL-Vacation-Search-Log.txt` inside your OneDrive
+folder, right next to the CSV. The price history CSV itself is still
+controlled by `Search-NclVacations.ps1`'s own `-CsvPath`/`-NoCsv` options;
+forward them through `-ScriptArguments` if you want to customize the search:
+
+```powershell
+.\Register-NclVacationsSchedule.ps1 -ScriptArguments "-EmbPorts JAX -AlertThreshold 320"
+```
+
+Other options:
+
+```powershell
+# Different times (24-hour "HH:mm")
+.\Register-NclVacationsSchedule.ps1 -Times 08:00,14:00,20:00
+
+# Run even when you're signed out (prompts once for your Windows password)
+.\Register-NclVacationsSchedule.ps1 -RunWhetherLoggedOnOrNot
+
+# Remove the scheduled task
+.\Register-NclVacationsSchedule.ps1 -Unregister
+```
+
+By default the task only runs while you're signed in to Windows (no
+password required) — that's normally fine as long as your PC is on and
+you're logged in around 8 AM/8 PM. Use `-RunWhetherLoggedOnOrNot` if you
+want it to run even when signed out.
+
+See `Get-Help .\Register-NclVacationsSchedule.ps1 -Full` for all parameters.
+
+### macOS/Linux (cron)
+
+Task Scheduler isn't available outside Windows, but `pwsh` and `cron` work
+the same way. Add a crontab entry that runs at 8 AM and 8 PM:
+
+```bash
+crontab -e
+```
+
+```cron
+0 8,20 * * * /usr/bin/pwsh -NoProfile -File "/path/to/Search-NclVacations.ps1" *>> "/path/to/NCL-Vacation-Search-Log.txt"
+```
+
+(On macOS, point `-CsvPath` at your local iCloud/OneDrive-synced folder,
+e.g. `~/OneDrive/NCL Price Tracking/NCL-Vacation-Price-History.csv`.)
