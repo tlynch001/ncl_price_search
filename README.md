@@ -99,6 +99,12 @@ day:
 .\Register-NclVacationsSchedule.ps1
 ```
 
+Re-running this script (e.g. after updating `Search-NclVacations.ps1`, or to
+change the times/search parameters) automatically removes any existing task
+of the same name first and replaces it with a new one — it always leaves
+exactly one up-to-date task behind, so there's no need to manually remove
+the old one first.
+
 Since a scheduled task has no visible console, each run's output (including
 any `***ALERT***` lines) is appended to a log file — by default
 `NCL Price Tracking\NCL-Vacation-Search-Log.txt` inside your OneDrive

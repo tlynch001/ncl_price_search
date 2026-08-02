@@ -11,6 +11,14 @@
     to a log file, since a scheduled task has no visible console of its own
     -- the CSV price history and this log are how you'll see what happened.
 
+    If a task with the same name (see -TaskName) already exists -- for
+    example one registered by an older version of this script -- it is
+    removed first and replaced with the one described by the parameters
+    you pass this time. Re-running this script is therefore the supported
+    way to update an existing schedule (change the times, the search
+    parameters, etc.): it always leaves exactly one task in place, matching
+    your latest settings.
+
     Any parameters you'd normally pass to Search-NclVacations.ps1 (e.g.
     -EmbPorts, -Dates, -AlertThreshold, -CsvPath) can be supplied here via
     -ScriptArguments as a single string and are forwarded through untouched.
@@ -165,7 +173,18 @@ $triggers = foreach ($time in $Times) {
 
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -RunOnlyIfNetworkAvailable
 
-if ($PSCmdlet.ShouldProcess($TaskName, "Register scheduled task running at $($Times -join ', ')")) {
+$existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+
+if ($PSCmdlet.ShouldProcess($TaskName, "Replace scheduled task to run at $($Times -join ', ')")) {
+    if ($existingTask) {
+        # Remove any existing task with this name first (e.g. one left over
+        # from an older version of this script) rather than relying solely
+        # on Register-ScheduledTask's -Force, so it's obvious exactly one
+        # up-to-date task is left behind afterwards.
+        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+        Write-Host "Removed existing scheduled task '$TaskName'." -ForegroundColor Yellow
+    }
+
     if ($RunWhetherLoggedOnOrNot) {
         $credential = Get-Credential -UserName "$env:USERDOMAIN\$env:USERNAME" -Message "Enter your Windows password so this task can run even when you're signed out"
         Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers -Settings $settings `
@@ -177,7 +196,8 @@ if ($PSCmdlet.ShouldProcess($TaskName, "Register scheduled task running at $($Ti
     }
 
     Write-Host ""
-    Write-Host "Scheduled task '$TaskName' registered to run daily at: $($Times -join ', ')" -ForegroundColor Green
+    $verb = if ($existingTask) { 'replaced with a new one' } else { 'registered' }
+    Write-Host "Scheduled task '$TaskName' $verb to run daily at: $($Times -join ', ')" -ForegroundColor Green
     if (-not $NoLog) {
         Write-Host "Each run's output will be appended to: $LogPath"
     }
