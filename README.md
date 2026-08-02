@@ -2,15 +2,20 @@
 
 A PowerShell script that searches Norwegian Cruise Line's (NCL) vacation
 finder for a given embarkation port, sailing months, and guest count, then
-lists each matching vacation with its length (in days) and price. Any
-vacation priced under a configurable threshold (default $320) gets an extra
-attention-grabbing `***ALERT***` line.
+lists each matching vacation with its cruise date, length (in days), and
+price. Any vacation priced under a configurable threshold (default $320)
+gets an extra attention-grabbing `***ALERT***` line.
 
 Under the hood, [ncl.com/vacations](https://www.ncl.com/vacations) is a
 single-page app that fetches its results from NCL's own JSON API at
 `https://www.ncl.com/api/v2/vacations/search` using the same query
 parameters found in the page URL. This script calls that API directly (no
-browser automation required) and pages through all of the results.
+browser automation required) and pages through all of the results. Since
+that search API only returns the lowest price found across the whole
+requested date range (not which specific date it applies to), the script
+makes one additional call per unique itinerary to NCL's per-itinerary
+"sailings" endpoint to resolve the actual cruise date (pass `-SkipCruiseDate`
+to skip this and speed up large searches).
 
 ## Usage
 
@@ -38,7 +43,7 @@ Or reuse any full `ncl.com/vacations` URL copied from your browser:
 
 See `Get-Help .\Search-NclVacations.ps1 -Full` for all parameters
 (`-EmbPorts`, `-Dates`, `-Guests`, `-Url`, `-AlertThreshold`, `-PageSize`,
-`-SortByPrice`, `-CsvPath`, `-NoCsv`).
+`-SortByPrice`, `-SkipCruiseDate`, `-CsvPath`, `-NoCsv`).
 
 ## Price history (CSV)
 
@@ -69,8 +74,15 @@ Or skip the CSV entirely:
 ```
 
 The CSV columns are: `Timestamp`, `SearchQuery`, `ItineraryCode`,
-`PackageId`, `Title`, `Ship`, `Days`, `Price`, `Currency`, `IsDeal`,
-`AlertThreshold`.
+`PackageId`, `Title`, `Ship`, `CruiseDate`, `Days`, `Price`, `Currency`,
+`IsDeal`, `AlertThreshold`.
+
+> **Note:** if you already have a CSV from before the `CruiseDate` column
+> was added, PowerShell's CSV append will silently keep using the old
+> (shorter) header and drop new columns rather than error — the script
+> detects this and prints a warning telling you to either archive/rename
+> the old file (so a fresh one is created) or add `CruiseDate` to its
+> header row yourself.
 
 Requires PowerShell 5.1+ (Windows PowerShell) or PowerShell 7+ (`pwsh`), and
 internet access to `www.ncl.com`.

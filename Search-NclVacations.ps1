@@ -12,6 +12,11 @@
     dates, guests, etc.). This script calls that same API directly, pages
     through all of the results, and prints a simple report.
 
+    Each result also shows the actual cruise (sail) date, resolved via one
+    extra call per unique itinerary to NCL's per-itinerary "sailings"
+    endpoint (the search API itself only returns the lowest price found
+    across the whole requested date range, not which date it applies to).
+
     For any vacation whose price is below -AlertThreshold, an extra
     attention-grabbing "***ALERT***" line is printed immediately below it.
 
@@ -54,6 +59,12 @@
 .PARAMETER SortByPrice
     If specified, results are sorted from cheapest to most expensive before
     being printed (the API's default order is NCL's own "Featured" order).
+
+.PARAMETER SkipCruiseDate
+    If specified, skips the extra per-itinerary lookup used to resolve each
+    result's actual cruise (sail) date, leaving the "Cruise Date" column
+    blank/"Unknown". Use this to speed up large, unfiltered searches (it
+    makes one additional API call per unique itinerary in the results).
 
 .PARAMETER CsvPath
     Path to the CSV file that results are appended to (the file and any
@@ -108,6 +119,8 @@ param(
 
     [switch]$SortByPrice,
 
+    [switch]$SkipCruiseDate,
+
     [string]$CsvPath,
 
     [switch]$NoCsv
@@ -121,6 +134,7 @@ if ($PSVersionTable.PSVersion.Major -lt 6) {
 }
 
 $ApiRoot = 'https://www.ncl.com/api/v2/vacations/search'
+$SailingsApiRoot = 'https://www.ncl.com/api/vacations/sailings'
 $UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
 
 function Get-NclQueryString {
@@ -197,6 +211,7 @@ function Get-NclVacations {
                 Price         = [double]$item.combinedPrice
                 Currency      = $item.currencyCode
                 Ship          = $item.ship.title
+                CruiseDate    = $null
             })
         }
 
@@ -204,6 +219,56 @@ function Get-NclVacations {
     }
 
     return $results
+}
+
+function Resolve-NclCruiseDates {
+    <#
+        The search API only returns each itinerary's lowest price across
+        the whole requested date range, not which specific sail date that
+        price applies to. To resolve an actual cruise date, this calls
+        NCL's per-itinerary "sailings" endpoint (the same one the site's
+        "Choose Your Sail Dates" panel uses) once per unique itinerary code
+        in the results, then matches each vacation's PackageId to the
+        corresponding sailStartDate and fills in its CruiseDate property.
+    #>
+    param(
+        [System.Collections.Generic.List[object]]$Vacations,
+        [string]$QueryString
+    )
+
+    $sailDatesByKey = @{}
+    $itineraryCodes = @($Vacations | Select-Object -ExpandProperty ItineraryCode -Unique)
+    $current = 0
+
+    foreach ($code in $itineraryCodes) {
+        $current++
+        Write-Progress -Activity 'Looking up cruise dates' -Status $code -PercentComplete (100 * $current / [Math]::Max(1, $itineraryCodes.Count))
+
+        $sailingsUrl = "{0}/{1}?{2}" -f $SailingsApiRoot, $code, $QueryString
+        try {
+            $response = Invoke-RestMethod -Uri $sailingsUrl -Method Get -Headers @{ Accept = 'application/json' } -UserAgent $UserAgent
+        }
+        catch {
+            Write-Warning "Could not look up the cruise date for itinerary '$code': $_"
+            continue
+        }
+
+        foreach ($room in @($response.pricingStateRooms)) {
+            $key = "$code|$($room.packageId)"
+            if (-not $sailDatesByKey.ContainsKey($key) -and $room.sailStartDate) {
+                $sailDatesByKey[$key] = [datetime]$room.sailStartDate
+            }
+        }
+    }
+
+    Write-Progress -Activity 'Looking up cruise dates' -Completed
+
+    foreach ($vacation in $Vacations) {
+        $key = "$($vacation.ItineraryCode)|$($vacation.PackageId)"
+        if ($sailDatesByKey.ContainsKey($key)) {
+            $vacation.CruiseDate = $sailDatesByKey[$key]
+        }
+    }
 }
 
 function Write-VacationReport {
@@ -226,11 +291,14 @@ function Write-VacationReport {
         # NCL prices its US site in dollars (see $vacation.Currency).
         $formattedPrice = '${0:N2}' -f $vacation.Price
 
+        $formattedCruiseDate = if ($vacation.CruiseDate) { $vacation.CruiseDate.ToString('MMMM d, yyyy') } else { 'Unknown' }
+
         Write-Host ""
-        Write-Host "Vacation: $($vacation.Title)"
-        Write-Host "Ship:     $($vacation.Ship)"
-        Write-Host "Days:     $($vacation.Days)"
-        Write-Host "Price:    $formattedPrice per person"
+        Write-Host "Vacation:    $($vacation.Title)"
+        Write-Host "Ship:        $($vacation.Ship)"
+        Write-Host "Cruise Date: $formattedCruiseDate"
+        Write-Host "Days:        $($vacation.Days)"
+        Write-Host "Price:       $formattedPrice per person"
 
         if ($vacation.Price -lt $AlertThreshold) {
             Write-Host "*** ALERT *** Price $formattedPrice is under `$$AlertThreshold! Grab this deal! *** ALERT ***" -ForegroundColor Red -BackgroundColor Yellow
@@ -292,6 +360,20 @@ function Export-VacationHistory {
         New-Item -ItemType Directory -Path $folder -Force | Out-Null
     }
 
+    $columnNames = @('Timestamp', 'SearchQuery', 'ItineraryCode', 'PackageId', 'Title', 'Ship', 'CruiseDate', 'Days', 'Price', 'Currency', 'IsDeal', 'AlertThreshold')
+
+    if (Test-Path -LiteralPath $CsvPath) {
+        $existingHeader = Get-Content -LiteralPath $CsvPath -TotalCount 1 -ErrorAction SilentlyContinue
+        $expectedHeader = ($columnNames | ForEach-Object { '"' + $_ + '"' }) -join ','
+        if ($existingHeader -and $existingHeader -ne $expectedHeader) {
+            # PowerShell's Export-Csv -Append silently keeps whatever columns
+            # are already in the file's header and drops anything that isn't
+            # there (e.g. a newly added CruiseDate column) rather than
+            # erroring -- so warn loudly instead of losing data quietly.
+            Write-Warning "'$CsvPath' already has a different set of columns than this version of the script writes. PowerShell will silently DROP any new columns (like CruiseDate) when appending -- it won't error. To capture every column going forward, either rename/archive the old file so a fresh one is created, or manually update its header row to:`n$expectedHeader"
+        }
+    }
+
     $rows = foreach ($vacation in $Vacations) {
         [PSCustomObject]@{
             Timestamp      = $Timestamp.ToString('yyyy-MM-dd HH:mm:ss')
@@ -300,6 +382,7 @@ function Export-VacationHistory {
             PackageId      = $vacation.PackageId
             Title          = $vacation.Title
             Ship           = $vacation.Ship
+            CruiseDate     = if ($vacation.CruiseDate) { $vacation.CruiseDate.ToString('yyyy-MM-dd') } else { '' }
             Days           = $vacation.Days
             Price          = $vacation.Price
             Currency       = $vacation.Currency
@@ -314,7 +397,7 @@ function Export-VacationHistory {
         Write-Host "Appended $($rows.Count) row(s) to '$CsvPath'." -ForegroundColor Green
     }
     catch {
-        Write-Warning "Could not write to '$CsvPath': $_ (Is the file open in Excel, or is OneDrive still syncing/signed out?)"
+        Write-Warning "Could not write to '$CsvPath': $_ (Is the file open in Excel, or is OneDrive still syncing/signed out? If you have an older CSV from before the 'CruiseDate' column was added, either rename/archive it so a fresh one can be created, or manually add a 'CruiseDate' column to its header row.)"
     }
 }
 
@@ -323,6 +406,10 @@ $queryString = Get-NclQueryString -Url $Url -EmbPorts $EmbPorts -Dates $Dates -G
 Write-Host "Searching NCL vacations (https://www.ncl.com/vacations?$queryString) ..." -ForegroundColor Cyan
 
 $vacations = Get-NclVacations -QueryString $queryString -PageSize $PageSize
+
+if (-not $SkipCruiseDate) {
+    Resolve-NclCruiseDates -Vacations $vacations -QueryString $queryString
+}
 
 if ($SortByPrice) {
     $vacations = [System.Collections.Generic.List[object]]($vacations | Sort-Object -Property Price)
