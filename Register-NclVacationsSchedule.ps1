@@ -23,6 +23,13 @@
     -EmbPorts, -Dates, -AlertThreshold, -CsvPath) can be supplied here via
     -ScriptArguments as a single string and are forwarded through untouched.
 
+    IMPORTANT: the scheduled task stores the *absolute path* to
+    Search-NclVacations.ps1 that was in effect when you ran this script, not
+    a live reference to it. If you move, rename, or re-clone the folder
+    these two scripts live in, the existing task will keep pointing at the
+    old (now missing) path and silently fail at its next scheduled run. Run
+    this script again from the new location afterwards to update the task.
+
     This script only works on Windows (it uses the built-in ScheduledTasks
     module). See the README for a cron-based alternative on macOS/Linux.
 

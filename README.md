@@ -105,6 +105,13 @@ of the same name first and replaces it with a new one — it always leaves
 exactly one up-to-date task behind, so there's no need to manually remove
 the old one first.
 
+> **If you move, rename, or re-clone the folder these scripts live in**,
+> re-run `Register-NclVacationsSchedule.ps1` afterwards. The task stores the
+> *absolute path* to `Search-NclVacations.ps1` at registration time, not a
+> live reference — moving the folder leaves the existing task pointing at a
+> path that no longer exists, and it will silently fail at its next
+> scheduled run until you re-register it.
+
 Since a scheduled task has no visible console, each run's output (including
 any `***ALERT***` lines) is appended to a log file — by default
 `NCL Price Tracking\NCL-Vacation-Search-Log.txt` inside your OneDrive
