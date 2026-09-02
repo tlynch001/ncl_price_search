@@ -69,6 +69,9 @@ always fired at precisely the same second.
 mkdir -p ~/.config/systemd/user
 cp systemd/ncl-price-search.service ~/.config/systemd/user/
 cp systemd/ncl-price-search.timer ~/.config/systemd/user/
+
+loginctl enable-linger "$USER"
+
 systemctl --user daemon-reload
 systemctl --user enable --now ncl-price-search.timer
 ```

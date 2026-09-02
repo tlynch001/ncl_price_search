@@ -320,8 +320,7 @@ $events = New-Object System.Collections.Generic.List[object]
 
 foreach ($vacation in $vacations) {
     $dateText = if ($vacation.CruiseDate) { $vacation.CruiseDate.ToString('yyyy-MM-dd') } else { 'Unknown' }
-    Write-Host ('{0,-20} {1}  {2,8:C2}  {3}' -f $vacation.Ship, $dateText, $vacation.Price, $vacation.Title)
-
+    Write-Host ('{0,-20} {1}  ${2,7:N2}  {3}' -f $vacation.Ship, $dateText, $vacation.Price, $vacation.Title)
     $event = Test-DealEvents -Vacation $vacation -History $history -Now $now
     if ($event.ShouldAlert) {
         $events.Add($event)
@@ -333,7 +332,7 @@ foreach ($vacation in $vacations) {
 
 # Send before appending current observations so a transient SMTP failure does not
 # make the current prices look like already-processed history on a retry.
-Send-FastmailAlert -Events @($events)
+Send-FastmailAlert -Events $events.ToArray()
 Export-History -Vacations $vacations -Path $CsvPath -SearchQuery $queryString -Now $now
 
 Write-Host "Saved $($vacations.Count) observation(s) to $CsvPath." -ForegroundColor Green
