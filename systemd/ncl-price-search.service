@@ -1,0 +1,10 @@
+[Unit]
+Description=NCL Jacksonville cruise price monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/projects/ncl_price_search
+EnvironmentFile=%h/.config/ncl-price-search.env
+ExecStart=/usr/bin/pwsh -NoProfile -File %h/projects/ncl_price_search/Monitor-NclVacations.ps1 -EmailAlerts -SortByPrice

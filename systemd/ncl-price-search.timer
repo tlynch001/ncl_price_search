@@ -1,0 +1,11 @@
+[Unit]
+Description=Check NCL Jacksonville prices every two hours during the day
+
+[Timer]
+OnCalendar=*-*-* 08,10,12,14,16,18,20,22:00:00
+Persistent=true
+RandomizedDelaySec=5m
+Unit=ncl-price-search.service
+
+[Install]
+WantedBy=timers.target
